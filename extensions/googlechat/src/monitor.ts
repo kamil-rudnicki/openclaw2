@@ -210,7 +210,8 @@ export async function handleGoogleChatWebhookRequest(
     ? authHeaderNow.slice("bearer ".length)
     : bearer;
 
-  const matchedTargets: WebhookTarget[] = [];
+  let selected: WebhookTarget | undefined;
+  const verificationErrors: string[] = [];
   for (const target of targets) {
     const audienceType = target.audienceType;
     const audience = target.audience;
@@ -220,26 +221,24 @@ export async function handleGoogleChatWebhookRequest(
       audience,
     });
     if (verification.ok) {
-      matchedTargets.push(target);
-      if (matchedTargets.length > 1) {
-        break;
-      }
+      selected = target;
+      break;
     }
+    verificationErrors.push(
+      `[${target.account.accountId}] ${verification.reason ?? "token verification failed"}`,
+    );
   }
 
-  if (matchedTargets.length === 0) {
+  if (!selected) {
+    const first = targets[0];
+    first?.runtime.error?.(
+      `[googlechat] webhook auth rejected path=${path}; ${verificationErrors[0] ?? "no matching target"}`,
+    );
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
 
-  if (matchedTargets.length > 1) {
-    res.statusCode = 401;
-    res.end("ambiguous webhook target");
-    return true;
-  }
-
-  const selected = matchedTargets[0];
   selected.statusSink?.({ lastInboundAt: Date.now() });
   processGoogleChatEvent(event, selected).catch((err) => {
     selected?.runtime.error?.(
