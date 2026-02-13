@@ -259,7 +259,9 @@ export async function handleGoogleChatWebhookRequest(
       }),
     );
   } else {
-    res.end("{}");
+    // For standard Chat app webhooks, return an empty 200 response.
+    // Sending a JSON object body here can trigger misleading UI errors in Chat.
+    res.end();
   }
   return true;
 }
