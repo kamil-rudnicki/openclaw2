@@ -75,8 +75,9 @@ export const googlechatDock: ChannelDock = {
     resolveReplyToMode: ({ cfg }) => cfg.channels?.["googlechat"]?.replyToMode ?? "off",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const threadId = context.MessageThreadId ?? context.ReplyToId;
+      const channelId = normalizeGoogleChatTarget(context.To) ?? context.To?.trim() ?? undefined;
       return {
-        currentChannelId: context.To?.trim() || undefined,
+        currentChannelId: channelId,
         currentThreadTs: threadId != null ? String(threadId) : undefined,
         hasRepliedRef,
       };

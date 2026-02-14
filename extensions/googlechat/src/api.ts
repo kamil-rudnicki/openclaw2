@@ -129,8 +129,11 @@ export async function sendGoogleChatMessage(params: {
     }));
   }
   const url = new URL(`${CHAT_API_BASE}/${space}/messages`);
-  // Keep replies in existing threads when possible; fallback to new thread if needed.
-  url.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+  if (thread) {
+    // Keep replies in existing threads when possible; fallback to new thread if needed.
+    // Google Chat rejects messageReplyOption when no reply context is provided.
+    url.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+  }
   const result = await fetchJson<{ name?: string }>(account, url.toString(), {
     method: "POST",
     body: JSON.stringify(body),

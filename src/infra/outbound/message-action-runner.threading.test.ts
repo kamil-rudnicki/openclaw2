@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { googlechatPlugin } from "../../../extensions/googlechat/src/channel.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -49,6 +50,19 @@ const telegramConfig = {
   },
 } as OpenClawConfig;
 
+const googleChatConfig = {
+  channels: {
+    googlechat: {
+      serviceAccount: {
+        client_email: "bot@example.com",
+        private_key: "-----BEGIN PRIVATE KEY-----\\nkey\\n-----END PRIVATE KEY-----\\n",
+      },
+      audienceType: "project-number",
+      audience: "1234567890",
+    },
+  },
+} as OpenClawConfig;
+
 async function runThreadingAction(params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
@@ -85,9 +99,11 @@ describe("runMessageAction threading auto-injection", () => {
     const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
     const { setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js");
     const { setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js");
+    const { setGoogleChatRuntime } = await import("../../../extensions/googlechat/src/runtime.js");
     const runtime = createPluginRuntime();
     setSlackRuntime(runtime);
     setTelegramRuntime(runtime);
+    setGoogleChatRuntime(runtime);
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -99,6 +115,11 @@ describe("runMessageAction threading auto-injection", () => {
           pluginId: "telegram",
           source: "test",
           plugin: telegramPlugin,
+        },
+        {
+          pluginId: "googlechat",
+          source: "test",
+          plugin: googlechatPlugin,
         },
       ]),
     );
@@ -234,5 +255,61 @@ describe("runMessageAction threading auto-injection", () => {
 
     expect(call?.replyToId).toBe("777");
     expect(call?.ctx?.params?.replyTo).toBe("777");
+  });
+
+  it("auto-injects googlechat threadId from toolContext when omitted", async () => {
+    mocks.executeSendAction.mockResolvedValue({
+      handledBy: "plugin",
+      payload: {},
+    });
+
+    await runMessageAction({
+      cfg: googleChatConfig,
+      action: "send",
+      params: {
+        channel: "googlechat",
+        target: "spaces/AAA",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "googlechat:spaces/AAA",
+        currentThreadTs: "spaces/AAA/threads/T1",
+      },
+      agentId: "main",
+    });
+
+    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
+      threadId?: string;
+      ctx?: { params?: Record<string, unknown> };
+    };
+    expect(call?.threadId).toBe("spaces/AAA/threads/T1");
+    expect(call?.ctx?.params?.threadId).toBe("spaces/AAA/threads/T1");
+  });
+
+  it("skips googlechat auto-threading when target space differs", async () => {
+    mocks.executeSendAction.mockResolvedValue({
+      handledBy: "plugin",
+      payload: {},
+    });
+
+    await runMessageAction({
+      cfg: googleChatConfig,
+      action: "send",
+      params: {
+        channel: "googlechat",
+        target: "spaces/BBB",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "googlechat:spaces/AAA",
+        currentThreadTs: "spaces/AAA/threads/T1",
+      },
+      agentId: "main",
+    });
+
+    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
+      ctx?: { params?: Record<string, unknown> };
+    };
+    expect(call?.ctx?.params?.threadId).toBeUndefined();
   });
 });

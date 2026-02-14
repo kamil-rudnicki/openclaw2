@@ -87,8 +87,10 @@ USER.md
 /memory/
 .agent/*.json
 !.agent/workflows/
-/local/
+local/
 package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+gateway.log
