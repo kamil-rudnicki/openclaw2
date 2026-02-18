@@ -49,6 +49,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -211,6 +212,49 @@ async function maybeApplyCrossContextMarker(params: {
     decoration,
     preferComponents: params.preferComponents,
   });
+}
+
+function stripGoogleChatMessageSuffix(target: string): string {
+  const index = target.toLowerCase().indexOf("/messages/");
+  if (index === -1) {
+    return target;
+  }
+  return target.slice(0, index);
+}
+
+/**
+ * Auto-inject Google Chat thread name when sending back into the same space.
+ *
+ * Google Chat expects `thread.name` for reply threading. When the message tool
+ * sends without explicit threadId, follow-up sends can fail with:
+ * "The request does not specify which message to reply to."
+ */
+function resolveGoogleChatAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  const normalizedToRaw = normalizeTargetForProvider("googlechat", params.to) ?? params.to.trim();
+  const normalizedChannelRaw =
+    normalizeTargetForProvider("googlechat", context.currentChannelId) ??
+    context.currentChannelId.trim();
+  const normalizedTo = normalizedToRaw || undefined;
+  const normalizedChannel = normalizedChannelRaw || undefined;
+  if (!normalizedTo || !normalizedChannel) {
+    return undefined;
+  }
+  const baseTo = stripGoogleChatMessageSuffix(normalizedTo);
+  const baseChannel = stripGoogleChatMessageSuffix(normalizedChannel);
+  if (!baseTo.toLowerCase().startsWith("spaces/")) {
+    return undefined;
+  }
+  if (baseTo.toLowerCase() !== baseChannel.toLowerCase()) {
+    return undefined;
+  }
+  return context.currentThreadTs;
 }
 
 async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknown>) {
@@ -475,12 +519,28 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const silent = readBooleanParam(params, "silent");
 
   const replyToId = readStringParam(params, "replyTo");
-  const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
-    channel,
-    to,
-    toolContext: input.toolContext,
-    allowSlackAutoThread: channel === "slack" && !replyToId,
-  });
+  const threadId = readStringParam(params, "threadId");
+  // Slack auto-threading can inject threadTs without explicit params; mirror to that session key.
+  const slackAutoThreadId =
+    channel === "slack" && !replyToId && !threadId
+      ? resolveSlackAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  // Telegram forum topic auto-threading: inject threadId so media/buttons land in the correct topic.
+  const telegramAutoThreadId =
+    channel === "telegram" && !threadId
+      ? resolveTelegramAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  const googleChatAutoThreadId =
+    channel === "googlechat" && !threadId
+      ? resolveGoogleChatAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  const resolvedThreadId =
+    threadId ?? slackAutoThreadId ?? telegramAutoThreadId ?? googleChatAutoThreadId;
+  // Write auto-resolved threadId back into params so downstream dispatch
+  // (plugin `readStringParam(params, "threadId")`) picks it up.
+  if (resolvedThreadId && !params.threadId) {
+    params.threadId = resolvedThreadId;
+  }
   const outboundRoute =
     agentId && !dryRun
       ? await resolveOutboundSessionRoute({

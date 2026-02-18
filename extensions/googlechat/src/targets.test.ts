@@ -3,6 +3,7 @@ import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
   normalizeGoogleChatTarget,
+  rememberGoogleChatSpaceAlias,
 } from "./targets.js";
 
 describe("normalizeGoogleChatTarget", () => {
@@ -20,6 +21,14 @@ describe("normalizeGoogleChatTarget", () => {
   it("preserves space targets", () => {
     expect(normalizeGoogleChatTarget("space:spaces/BBB")).toBe("spaces/BBB");
     expect(normalizeGoogleChatTarget("spaces/CCC")).toBe("spaces/CCC");
+  });
+
+  it("resolves remembered space display names", () => {
+    rememberGoogleChatSpaceAlias({
+      spaceId: "spaces/AAA",
+      displayName: "KR test 2",
+    });
+    expect(normalizeGoogleChatTarget("KR test 2")).toBe("spaces/AAA");
   });
 });
 

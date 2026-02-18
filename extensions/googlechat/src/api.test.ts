@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia } from "./api.js";
+import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 
 vi.mock("./auth.js", () => ({
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
@@ -57,5 +57,48 @@ describe("downloadGoogleChatMedia", () => {
     await expect(
       downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
     ).rejects.toThrow(/max bytes/i);
+  });
+});
+
+describe("sendGoogleChatMessage", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sets messageReplyOption when thread is provided", async () => {
+    const response = new Response(JSON.stringify({ name: "spaces/AAA/messages/1" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "hello",
+      thread: "spaces/AAA/threads/xyz",
+    });
+
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+  });
+
+  it("omits messageReplyOption when thread is not provided", async () => {
+    const response = new Response(JSON.stringify({ name: "spaces/AAA/messages/1" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "hello",
+    });
+
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).not.toContain("messageReplyOption=");
   });
 });

@@ -19,6 +19,7 @@ import {
 } from "./api.js";
 import { verifyGoogleChatRequest, type GoogleChatAudienceType } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { rememberGoogleChatSpaceAlias } from "./targets.js";
 import type {
   GoogleChatAnnotation,
   GoogleChatAttachment,
@@ -145,6 +146,7 @@ export async function handleGoogleChatWebhookRequest(
   }
 
   let raw = body.value;
+  let isWorkspaceAddonPayload = false;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     res.statusCode = 400;
     res.end("invalid payload");
@@ -163,6 +165,7 @@ export async function handleGoogleChatWebhookRequest(
   };
 
   if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.messagePayload) {
+    isWorkspaceAddonPayload = true;
     const chat = rawObj.chat;
     const messagePayload = chat.messagePayload;
     raw = {
@@ -208,7 +211,8 @@ export async function handleGoogleChatWebhookRequest(
     ? authHeaderNow.slice("bearer ".length)
     : bearer;
 
-  const matchedTargets: WebhookTarget[] = [];
+  let selected: WebhookTarget | undefined;
+  const verificationErrors: string[] = [];
   for (const target of targets) {
     const audienceType = target.audienceType;
     const audience = target.audience;
@@ -218,26 +222,24 @@ export async function handleGoogleChatWebhookRequest(
       audience,
     });
     if (verification.ok) {
-      matchedTargets.push(target);
-      if (matchedTargets.length > 1) {
-        break;
-      }
+      selected = target;
+      break;
     }
+    verificationErrors.push(
+      `[${target.account.accountId}] ${verification.reason ?? "token verification failed"}`,
+    );
   }
 
-  if (matchedTargets.length === 0) {
+  if (!selected) {
+    const first = targets[0];
+    first?.runtime.error?.(
+      `[googlechat] webhook auth rejected path=${path}; ${verificationErrors[0] ?? "no matching target"}`,
+    );
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
 
-  if (matchedTargets.length > 1) {
-    res.statusCode = 401;
-    res.end("ambiguous webhook target");
-    return true;
-  }
-
-  const selected = matchedTargets[0];
   selected.statusSink?.({ lastInboundAt: Date.now() });
   processGoogleChatEvent(event, selected).catch((err) => {
     selected?.runtime.error?.(
@@ -247,7 +249,21 @@ export async function handleGoogleChatWebhookRequest(
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end("{}");
+  if (isWorkspaceAddonPayload) {
+    // Google Workspace add-ons require hostAppDataAction response shape.
+    // Without this, Chat can display "not responding" despite successful processing.
+    res.end(
+      JSON.stringify({
+        hostAppDataAction: {
+          chatDataAction: {},
+        },
+      }),
+    );
+  } else {
+    // For standard Chat app webhooks, return an empty 200 response.
+    // Sending a JSON object body here can trigger misleading UI errors in Chat.
+    res.end();
+  }
   return true;
 }
 
@@ -404,6 +420,7 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
+  rememberGoogleChatSpaceAlias({ spaceId, displayName: space.displayName });
   const spaceType = (space.type ?? "").toUpperCase();
   const isGroup = spaceType !== "DM";
   const sender = message.sender ?? event.user;
@@ -649,6 +666,7 @@ async function processMessageWithPipeline(params: {
     Surface: "googlechat",
     MessageSid: message.name,
     MessageSidFull: message.name,
+    MessageThreadId: message.thread?.name,
     ReplyToId: message.thread?.name,
     ReplyToIdFull: message.thread?.name,
     MediaPath: mediaPath,
@@ -719,6 +737,7 @@ async function processMessageWithPipeline(params: {
           payload,
           account,
           spaceId,
+          threadName: message.thread?.name,
           runtime,
           core,
           config,
@@ -766,14 +785,25 @@ async function deliverGoogleChatReply(params: {
   payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
   account: ResolvedGoogleChatAccount;
   spaceId: string;
+  threadName?: string;
   runtime: GoogleChatRuntimeEnv;
   core: GoogleChatCoreRuntime;
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
-    params;
+  const {
+    payload,
+    account,
+    spaceId,
+    threadName,
+    runtime,
+    core,
+    config,
+    statusSink,
+    typingMessageName,
+  } = params;
+  const effectiveThread = threadName ?? payload.replyToId;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -830,7 +860,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: effectiveThread,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -862,7 +892,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread: effectiveThread,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });
