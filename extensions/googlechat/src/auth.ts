@@ -90,6 +90,28 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
 
 export type GoogleChatAudienceType = "app-url" | "project-number";
 
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function buildAudienceCandidates(rawAudience: string): string[] {
+  const audience = rawAudience.trim();
+  const candidates = [audience];
+  try {
+    const parsed = new URL(audience);
+    const pathname =
+      parsed.pathname.length > 1 && parsed.pathname.endsWith("/")
+        ? parsed.pathname.slice(0, -1)
+        : parsed.pathname || "/";
+    const baseNoPath = `${parsed.origin}`;
+    const withPath = `${parsed.origin}${pathname === "/" ? "" : pathname}`;
+    candidates.push(baseNoPath, `${baseNoPath}/`, withPath, `${withPath}/`);
+  } catch {
+    // Keep exact audience only when URL parsing fails.
+  }
+  return unique(candidates);
+}
+
 export async function verifyGoogleChatRequest(params: {
   bearer?: string | null;
   audienceType?: GoogleChatAudienceType | null;
@@ -106,19 +128,30 @@ export async function verifyGoogleChatRequest(params: {
   const audienceType = params.audienceType ?? null;
 
   if (audienceType === "app-url") {
-    try {
-      const ticket = await verifyClient.verifyIdToken({
-        idToken: bearer,
-        audience,
-      });
-      const payload = ticket.getPayload();
-      const email = payload?.email ?? "";
-      const ok =
-        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
-      return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
-    } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };
+    const audienceCandidates = buildAudienceCandidates(audience);
+    const errors: string[] = [];
+    for (const candidate of audienceCandidates) {
+      try {
+        const ticket = await verifyClient.verifyIdToken({
+          idToken: bearer,
+          audience: candidate,
+        });
+        const payload = ticket.getPayload();
+        const email = payload?.email ?? "";
+        const ok =
+          payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+        if (ok) {
+          return { ok: true };
+        }
+        errors.push(`invalid issuer: ${email}`);
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : "invalid token");
+      }
     }
+    return {
+      ok: false,
+      reason: `token verification failed for audiences: ${audienceCandidates.join(", ")}; ${errors[0] ?? "invalid token"}`,
+    };
   }
 
   if (audienceType === "project-number") {
