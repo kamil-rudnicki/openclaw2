@@ -65,12 +65,12 @@ describe("sendGoogleChatMessage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("sets messageReplyOption when thread is provided", async () => {
-    const response = new Response(JSON.stringify({ name: "spaces/AAA/messages/1" }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-    const fetchMock = vi.fn().mockResolvedValue(response);
+  it("adds messageReplyOption when sending to an existing thread", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ name: "spaces/AAA/messages/123" }), { status: 200 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await sendGoogleChatMessage({
@@ -80,16 +80,20 @@ describe("sendGoogleChatMessage", () => {
       thread: "spaces/AAA/threads/xyz",
     });
 
-    const url = String(fetchMock.mock.calls[0]?.[0]);
-    expect(url).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      text: "hello",
+      thread: { name: "spaces/AAA/threads/xyz" },
+    });
   });
 
-  it("omits messageReplyOption when thread is not provided", async () => {
-    const response = new Response(JSON.stringify({ name: "spaces/AAA/messages/1" }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-    const fetchMock = vi.fn().mockResolvedValue(response);
+  it("does not set messageReplyOption for non-thread sends", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ name: "spaces/AAA/messages/124" }), { status: 200 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await sendGoogleChatMessage({
@@ -98,7 +102,7 @@ describe("sendGoogleChatMessage", () => {
       text: "hello",
     });
 
-    const url = String(fetchMock.mock.calls[0]?.[0]);
-    expect(url).not.toContain("messageReplyOption=");
+    const [url] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).not.toContain("messageReplyOption=");
   });
 });
