@@ -24,6 +24,7 @@ import type {
 } from "./monitor-types.js";
 import { createGoogleChatWebhookRequestHandler } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import { rememberGoogleChatSpaceAlias } from "./targets.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 export type { GoogleChatMonitorOptions, GoogleChatRuntimeEnv } from "./monitor-types.js";
 export { isSenderAllowed };
@@ -113,7 +114,7 @@ async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTar
  * Resolve bot display name with fallback chain:
  * 1. Account config name
  * 2. Agent name from config
- * 3. "OpenClaw" as generic fallback
+ * 3. "Tic" as generic fallback
  */
 function resolveBotDisplayName(params: {
   accountName?: string;
@@ -128,7 +129,7 @@ function resolveBotDisplayName(params: {
   if (agent?.name?.trim()) {
     return agent.name.trim();
   }
-  return "OpenClaw";
+  return "Tic";
 }
 
 async function processMessageWithPipeline(params: {
@@ -151,6 +152,7 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
+  rememberGoogleChatSpaceAlias({ spaceId, displayName: space.displayName });
   const spaceType = (space.type ?? "").toUpperCase();
   const isGroup = spaceType !== "DM";
   const sender = message.sender ?? event.user;
@@ -250,6 +252,7 @@ async function processMessageWithPipeline(params: {
     Surface: "googlechat",
     MessageSid: message.name,
     MessageSidFull: message.name,
+    MessageThreadId: message.thread?.name,
     ReplyToId: message.thread?.name,
     ReplyToIdFull: message.thread?.name,
     MediaPath: mediaPath,
@@ -320,6 +323,7 @@ async function processMessageWithPipeline(params: {
           payload,
           account,
           spaceId,
+          threadName: message.thread?.name,
           runtime,
           core,
           config,
@@ -367,14 +371,25 @@ async function deliverGoogleChatReply(params: {
   payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
   account: ResolvedGoogleChatAccount;
   spaceId: string;
+  threadName?: string;
   runtime: GoogleChatRuntimeEnv;
   core: GoogleChatCoreRuntime;
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
-    params;
+  const {
+    payload,
+    account,
+    spaceId,
+    threadName,
+    runtime,
+    core,
+    config,
+    statusSink,
+    typingMessageName,
+  } = params;
+  const effectiveThread = threadName ?? payload.replyToId;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -431,7 +446,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: effectiveThread,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -463,7 +478,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread: effectiveThread,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });

@@ -1,6 +1,32 @@
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage } from "./api.js";
 
+const knownSpaceAliases = new Map<string, string>();
+
+function normalizeAliasKey(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
+export function rememberGoogleChatSpaceAlias(params: {
+  spaceId?: string | null;
+  displayName?: string | null;
+}) {
+  const spaceId = params.spaceId?.trim();
+  if (!spaceId) {
+    return;
+  }
+  const displayKey = normalizeAliasKey(params.displayName);
+  if (displayKey) {
+    knownSpaceAliases.set(displayKey, spaceId);
+  }
+  // Also allow explicit targeting by raw space id with case-insensitive lookup.
+  const idKey = normalizeAliasKey(spaceId);
+  if (idKey) {
+    knownSpaceAliases.set(idKey, spaceId);
+  }
+}
+
 export function normalizeGoogleChatTarget(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -19,6 +45,11 @@ export function normalizeGoogleChatTarget(raw?: string | null): string | undefin
   }
   if (normalized.includes("@")) {
     return `users/${normalized.toLowerCase()}`;
+  }
+  const aliasKey = normalizeAliasKey(normalized);
+  const resolvedAlias = aliasKey ? knownSpaceAliases.get(aliasKey) : undefined;
+  if (resolvedAlias) {
+    return resolvedAlias;
   }
   return normalized;
 }
